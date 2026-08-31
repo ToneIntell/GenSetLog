@@ -12,7 +12,9 @@
       --blue: #1769aa;
       --light: #f3f6f9;
       --border: #d9e0e6;
-      --danger: #b42318;
+      --green: #18794e;
+      --red: #b42318;
+      --orange: #a15c00;
     }
 
     * { box-sizing: border-box; }
@@ -52,6 +54,11 @@
     h2 {
       font-size: 19px;
       margin: 0 0 14px;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 17px;
     }
 
     label {
@@ -94,8 +101,11 @@
 
     button.danger {
       background: #fff0ef;
-      color: var(--danger);
-      margin-top: 10px;
+      color: var(--red);
+    }
+
+    button.service-button {
+      background: var(--green);
     }
 
     .calculated {
@@ -127,6 +137,30 @@
 
     .summary-card strong {
       font-size: 18px;
+    }
+
+    .service-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .service-status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      font-weight: 700;
+    }
+
+    .status-ok {
+      background: #e9f7ef;
+      color: var(--green);
+    }
+
+    .status-due {
+      background: #fff3df;
+      color: var(--orange);
     }
 
     .date-heading {
@@ -175,10 +209,6 @@
         grid-template-columns: 1fr 1fr;
         gap: 0 14px;
       }
-
-      .form-grid label {
-        margin-top: 12px;
-      }
     }
   </style>
 </head>
@@ -211,49 +241,65 @@
 
           <div>
             <label for="hours">Operating hours</label>
-            <input id="hours" type="number" min="0" step="0.1" placeholder="e.g. 5.5" required>
+            <input id="hours" type="number" min="0" step="0.1"
+                   placeholder="e.g. 5.5" required>
           </div>
 
           <div>
             <label for="litres">Fuel used, litres</label>
-            <input id="litres" type="number" min="0" step="0.01" placeholder="e.g. 8.2" required>
+            <input id="litres" type="number" min="0" step="0.01"
+                   placeholder="e.g. 8.2" required>
           </div>
 
           <div>
             <label for="price">Fuel price per litre</label>
-            <input id="price" type="number" min="0" step="0.001" placeholder="e.g. 2.00" required>
+            <input id="price" type="number" min="0" step="0.001"
+                   placeholder="e.g. 2.00" required>
           </div>
         </div>
 
         <label for="notes">Notes — optional</label>
-        <textarea id="notes" placeholder="e.g. Morning run, pump operation"></textarea>
+        <textarea id="notes"
+          placeholder="e.g. Morning run, pump operation"></textarea>
 
         <div class="calculated">
-          Calculated fuel cost: <span id="calculatedCost">$0.00</span>
+          Calculated fuel cost:
+          <span id="calculatedCost">$0.00</span>
         </div>
 
         <div class="button-row">
           <button type="submit" id="saveButton">Save record</button>
-          <button type="button" class="secondary" id="cancelButton" hidden>Cancel</button>
+          <button type="button" class="secondary"
+                  id="cancelButton" hidden>Cancel</button>
         </div>
       </form>
     </section>
 
     <section>
-      <h2>Summary</h2>
+      <h2>Service tracking</h2>
+
+      <div id="serviceCards"></div>
+    </section>
+
+    <section>
+      <h2>Overall summary</h2>
+
       <div class="summary-grid">
         <div class="summary-card">
           <small>Total operating hours</small>
           <strong id="totalHours">0.0</strong>
         </div>
+
         <div class="summary-card">
           <small>Total fuel used</small>
           <strong id="totalLitres">0.00 L</strong>
         </div>
+
         <div class="summary-card">
           <small>Total fuel cost</small>
           <strong id="totalCost">$0.00</strong>
         </div>
+
         <div class="summary-card">
           <small>Cost per operating hour</small>
           <strong id="costPerHour">$0.00</strong>
@@ -270,11 +316,33 @@
   </main>
 
   <script>
+    /*
+      Keep this key unchanged so existing operating records are preserved.
+    */
     const STORAGE_KEY = "genset-log-records-v1";
+    const SERVICE_KEY = "genset-service-v1";
     const CURRENCY = "AUD";
+    const GENSETS = ["Gentrax", "Kubota"];
 
     const $ = id => document.getElementById(id);
-    let records = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+
+    let records = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) || "[]"
+    );
+
+    let serviceData = JSON.parse(
+      localStorage.getItem(SERVICE_KEY) || "{}"
+    );
+
+    GENSETS.forEach(genset => {
+      if (!serviceData[genset]) {
+        serviceData[genset] = {
+          lastServiceHours: 0,
+          interval: 100,
+          lastServiceDate: ""
+        };
+      }
+    });
 
     function money(value) {
       return new Intl.NumberFormat("en-AU", {
@@ -284,12 +352,15 @@
     }
 
     function today() {
-      const d = new Date();
-      return d.toISOString().slice(0, 10);
+      return new Date().toISOString().slice(0, 10);
     }
 
     function saveRecords() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    }
+
+    function saveServiceData() {
+      localStorage.setItem(SERVICE_KEY, JSON.stringify(serviceData));
     }
 
     function updateCost() {
@@ -298,10 +369,24 @@
       $("calculatedCost").textContent = money(litres * price);
     }
 
+    function totalHoursFor(genset) {
+      return records
+        .filter(r => r.genset === genset)
+        .reduce((sum, r) => sum + Number(r.hours || 0), 0);
+    }
+
+    function totalHours() {
+      return records.reduce(
+        (sum, r) => sum + Number(r.hours || 0), 0
+      );
+    }
+
     function formatDate(dateString) {
+      if (!dateString) return "Not recorded";
+
       const d = new Date(dateString + "T00:00:00");
+
       return d.toLocaleDateString("en-AU", {
-        weekday: "long",
         day: "numeric",
         month: "long",
         year: "numeric"
@@ -317,10 +402,127 @@
         .replaceAll("'", "&#039;");
     }
 
+    function renderServiceCards() {
+      $("serviceCards").innerHTML = GENSETS.map(genset => {
+        const current = totalHoursFor(genset);
+        const service = serviceData[genset];
+
+        const sinceService = Math.max(
+          0,
+          current - Number(service.lastServiceHours || 0)
+        );
+
+        const interval = Number(service.interval || 0);
+        const remaining = interval - sinceService;
+        const due = interval > 0 && sinceService >= interval;
+
+        return `
+          <div class="service-card">
+            <h3>${genset}</h3>
+
+            <div class="summary-grid">
+              <div class="summary-card">
+                <small>Total hours</small>
+                <strong>${current.toFixed(1)}</strong>
+              </div>
+
+              <div class="summary-card">
+                <small>Hours since service</small>
+                <strong>${sinceService.toFixed(1)}</strong>
+              </div>
+            </div>
+
+            <label for="serviceHours-${genset}">
+              Last service recorded at total hours
+            </label>
+            <input
+              id="serviceHours-${genset}"
+              type="number"
+              min="0"
+              step="0.1"
+              value="${service.lastServiceHours || 0}"
+              onchange="changeServiceHours('${genset}', this.value)"
+            >
+
+            <label for="serviceInterval-${genset}">
+              Service interval, hours
+            </label>
+            <input
+              id="serviceInterval-${genset}"
+              type="number"
+              min="1"
+              step="1"
+              value="${service.interval || 100}"
+              onchange="changeServiceInterval('${genset}', this.value)"
+            >
+
+            <div class="service-status ${due ? "status-due" : "status-ok"}">
+              ${
+                due
+                  ? `Service due — ${Math.abs(remaining).toFixed(1)} hours overdue`
+                  : `${remaining.toFixed(1)} hours until service is due`
+              }
+            </div>
+
+            <div class="entry-details">
+              Last service date:
+              ${service.lastServiceDate
+                ? formatDate(service.lastServiceDate)
+                : "Not recorded"}
+            </div>
+
+            <button
+              class="service-button"
+              onclick="markServiced('${genset}')">
+              Mark ${genset} serviced now
+            </button>
+          </div>
+        `;
+      }).join("");
+    }
+
+    window.changeServiceHours = function(genset, value) {
+      serviceData[genset].lastServiceHours = Number(value) || 0;
+      saveServiceData();
+      renderServiceCards();
+    };
+
+    window.changeServiceInterval = function(genset, value) {
+      serviceData[genset].interval = Number(value) || 100;
+      saveServiceData();
+      renderServiceCards();
+    };
+
+    window.markServiced = function(genset) {
+      const current = totalHoursFor(genset);
+
+      if (!confirm(
+        `Mark ${genset} as serviced at ${current.toFixed(1)} operating hours?`
+      )) {
+        return;
+      }
+
+      serviceData[genset].lastServiceHours = current;
+      serviceData[genset].lastServiceDate = today();
+
+      saveServiceData();
+      renderServiceCards();
+    };
+
     function renderSummary() {
-      const hours = records.reduce((sum, r) => sum + Number(r.hours), 0);
-      const litres = records.reduce((sum, r) => sum + Number(r.litres), 0);
-      const cost = records.reduce((sum, r) => sum + Number(r.cost), 0);
+      const hours = totalHours();
+      const litres = records.reduce(
+        (sum, r) => sum + Number(r.litres || 0), 0
+      );
+
+      const cost = records.reduce((sum, r) => {
+        const calculatedCost =
+          r.cost !== undefined
+            ? Number(r.cost)
+            : Number(r.litres || 0) * Number(r.price || 0);
+
+        return sum + calculatedCost;
+      }, 0);
 
       $("totalHours").textContent = hours.toFixed(1);
       $("totalLitres").textContent = litres.toFixed(2) + " L";
@@ -332,11 +534,13 @@
       const container = $("records");
 
       if (!records.length) {
-        container.innerHTML = '<div class="muted">No records saved yet.</div>';
+        container.innerHTML =
+          '<div class="muted">No records saved yet.</div>';
         return;
       }
 
       const grouped = {};
+
       [...records]
         .sort((a, b) =>
           b.date.localeCompare(a.date) || b.created - a.created
@@ -348,32 +552,64 @@
 
       container.innerHTML = Object.keys(grouped).map(date => `
         <div class="date-heading">${formatDate(date)}</div>
-        ${grouped[date].map(record => `
-          <div class="entry">
-            <div class="entry-title">
-              <span>${escapeHtml(record.genset)}</span>
-              <span>${money(record.cost)}</span>
-            </div>
 
-            <div class="entry-details">
-              ${Number(record.hours).toFixed(1)} operating hours ·
-              ${Number(record.litres).toFixed(2)} litres ·
-              ${money(record.price)} per litre
-              ${record.notes ? `<br>${escapeHtml(record.notes)}` : ""}
-            </div>
+        ${grouped[date].map(record => {
+          const cost =
+            record.cost !== undefined
+              ? Number(record.cost)
+              : Number(record.litres || 0) * Number(record.price || 0);
 
-            <div class="button-row">
-              <button class="secondary" onclick="editRecord('${record.id}')">Edit</button>
-              <button class="danger" onclick="deleteRecord('${record.id}')">Delete</button>
+          return `
+            <div class="entry">
+              <div class="entry-title">
+                <span>${escapeHtml(record.genset)}</span>
+                <span>${money(cost)}</span>
+              </div>
+
+              <div class="entry-details">
+                ${Number(record.hours || 0).toFixed(1)} operating hours ·
+                ${Number(record.litres || 0).toFixed(2)} litres ·
+                ${money(record.price)} per litre
+                ${
+                  record.notes
+                    ? `<br>${escapeHtml(record.notes)}`
+                    : ""
+                }
+              </div>
+
+              <div class="button-row">
+                <button
+                  class="secondary"
+                  onclick="editRecord('${record.id}')">
+                  Edit
+                </button>
+
+                <button
+                  class="danger"
+                  onclick="deleteRecord('${record.id}')">
+                  Delete
+                </button>
+              </div>
             </div>
-          </div>
-        `).join("")}
+          `;
+        }).join("")}
       `).join("");
     }
 
     function render() {
+      renderServiceCards();
       renderSummary();
       renderRecords();
+    }
+
+    function resetForm() {
+      $("logForm").reset();
+      $("date").value = today();
+      $("entryId").value = "";
+      $("formTitle").textContent = "Add operating record";
+      $("saveButton").textContent = "Save record";
+      $("cancelButton").hidden = true;
+      $("calculatedCost").textContent = money(0);
     }
 
     $("date").value = today();
@@ -389,8 +625,14 @@
       const hours = Number($("hours").value);
       const existingId = $("entryId").value;
 
+      const existing = records.find(r => r.id === existingId);
+
       const record = {
-        id: existingId || crypto.randomUUID(),
+        id: existingId || (
+          crypto.randomUUID
+            ? crypto.randomUUID()
+            : String(Date.now())
+        ),
         date: $("date").value,
         genset: $("genset").value,
         hours,
@@ -398,13 +640,13 @@
         price,
         cost: litres * price,
         notes: $("notes").value.trim(),
-        created: existingId
-          ? (records.find(r => r.id === existingId)?.created || Date.now())
-          : Date.now()
+        created: existing ? existing.created : Date.now()
       };
 
       if (existingId) {
-        records = records.map(r => r.id === existingId ? record : r);
+        records = records.map(r =>
+          r.id === existingId ? record : r
+        );
       } else {
         records.push(record);
       }
@@ -413,16 +655,6 @@
       render();
       resetForm();
     });
-
-    function resetForm() {
-      $("logForm").reset();
-      $("date").value = today();
-      $("entryId").value = "";
-      $("formTitle").textContent = "Add operating record";
-      $("saveButton").textContent = "Save record";
-      $("cancelButton").hidden = true;
-      $("calculatedCost").textContent = money(0);
-    }
 
     window.editRecord = function(id) {
       const record = records.find(r => r.id === id);
@@ -439,8 +671,8 @@
       $("formTitle").textContent = "Edit operating record";
       $("saveButton").textContent = "Update record";
       $("cancelButton").hidden = false;
-      updateCost();
 
+      updateCost();
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
 
@@ -470,15 +702,22 @@
         "Notes"
       ];
 
-      const rows = records.map(r => [
-        r.date,
-        r.genset,
-        r.hours,
-        r.litres,
-        r.price,
-        r.cost,
-        r.notes || ""
-      ]);
+      const rows = records.map(r => {
+        const cost =
+          r.cost !== undefined
+            ? Number(r.cost)
+            : Number(r.litres || 0) * Number(r.price || 0);
+
+        return [
+          r.date,
+          r.genset,
+          r.hours,
+          r.litres,
+          r.price,
+          cost,
+          r.notes || ""
+        ];
+      });
 
       const csv = [headings, ...rows]
         .map(row => row.map(value =>
@@ -492,9 +731,11 @@
 
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
+
       link.href = url;
       link.download = "genset-records.csv";
       link.click();
+
       URL.revokeObjectURL(url);
     });
 

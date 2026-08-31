@@ -1,4 +1,4 @@
-const CACHE_NAME = "genset-log-v1";
+const CACHE_NAME = "genset-log-v2";
 const FILES = [
   "./",
   "./index.html",

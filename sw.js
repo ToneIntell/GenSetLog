@@ -1,4 +1,4 @@
-const CACHE_NAME = "genset-log-v3";
+const CACHE_NAME = "genset-log-v4";
 
 const FILES = [
   "./",

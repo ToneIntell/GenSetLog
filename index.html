@@ -263,6 +263,16 @@
       line-height: 1.5;
     }
 
+    .notice {
+      background: #eaf4ff;
+      color: #174b73;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+
     .file-input {
       padding: 8px;
     }
@@ -307,6 +317,12 @@
           <option value="Kubota">Kubota</option>
         </select>
 
+        <div class="notice">
+          Cost per operating hour uses only operating records with a recorded
+          fuel price. Initial hours before the app was used are excluded from
+          that calculation.
+        </div>
+
         <div class="summary-grid">
           <div class="summary-card">
             <small>Total operating hours</small>
@@ -319,12 +335,12 @@
           </div>
 
           <div class="summary-card">
-            <small>Total fuel cost</small>
+            <small>Recorded fuel cost</small>
             <strong id="totalCost">$0.00</strong>
           </div>
 
           <div class="summary-card">
-            <small>Cost per operating hour</small>
+            <small>Cost per priced operating hour</small>
             <strong id="costPerHour">$0.00</strong>
           </div>
 
@@ -383,7 +399,10 @@
             </div>
 
             <div>
-              <label for="price">Fuel price per litre</label>
+              <label for="price">
+                Fuel price per litre
+                <span id="fuelTypeLabel"></span>
+              </label>
               <input
                 id="price"
                 type="number"
@@ -415,6 +434,7 @@
 
           <div class="button-row">
             <button type="submit" id="saveButton">Save record</button>
+
             <button
               type="button"
               class="secondary"
@@ -440,9 +460,9 @@
 
         <label for="serviceGensetFilter">Genset</label>
         <select id="serviceGensetFilter">
-          <option value="all">All gensets</option>
-          <option value="Gentrax">Gentrax</option>
+          <option value="Gentrax" selected>Gentrax</option>
           <option value="Kubota">Kubota</option>
+          <option value="all">All gensets</option>
         </select>
 
         <div id="serviceCards"></div>
@@ -456,7 +476,7 @@
 
         <p>
           Use a full backup to preserve operating records, service history,
-          and setup values.
+          fuel prices, service intervals, and setup values.
         </p>
 
         <button id="exportBackupButton">
@@ -489,11 +509,12 @@
     <!-- SETUP -->
     <div id="setup" class="screen">
       <section>
-        <h2>Initial conditions</h2>
+        <h2>Genset setup</h2>
 
         <div class="warning">
-          These values affect total operating hours and service calculations.
-          Changes require confirmation.
+          Initial operating hours affect total operating hours and
+          hour-based service calculations. Fuel prices are used as the
+          default price when entering a new operating record.
         </div>
 
         <div id="setupFields"></div>
@@ -503,11 +524,12 @@
 
   <script>
     /*
-      These keys are unchanged so existing records remain available.
+      Existing storage keys are retained for compatibility.
     */
     const STORAGE_KEY = "genset-log-records-v1";
     const SERVICE_KEY = "genset-service-history-v1";
     const SETTINGS_KEY = "genset-settings-v1";
+
     const CURRENCY = "AUD";
     const GENSETS = ["Gentrax", "Kubota"];
 
@@ -525,47 +547,25 @@
       localStorage.getItem(SETTINGS_KEY) || "{}"
     );
 
-    GENSETS.forEach(genset => {
-      if (!settings[genset]) {
-        settings[genset] = {
-          initialHours: 0,
-          serviceInterval: 100
-        };
-      }
-    });
+    function today() {
+      return new Date().toISOString().slice(0, 10);
+    }
 
-    const oldServiceData = JSON.parse(
-      localStorage.getItem("genset-service-v1") || "{}"
-    );
+    function dateFromTodayMonths(months) {
+      const date = new Date();
+      date.setHours(12, 0, 0, 0);
+      date.setMonth(date.getMonth() + Number(months || 0));
+      return date;
+    }
 
-    if (
-      serviceHistory.length === 0 &&
-      Object.keys(oldServiceData).length > 0
-    ) {
-      GENSETS.forEach(genset => {
-        const old = oldServiceData[genset];
+    function addMonths(dateString, months) {
+      if (!dateString) return null;
 
-        if (!old) return;
+      const date = new Date(dateString + "T12:00:00");
+      if (Number.isNaN(date.getTime())) return null;
 
-        if (old.interval) {
-          settings[genset].serviceInterval = Number(old.interval);
-        }
-
-        if (Number(old.lastServiceHours) > 0) {
-          serviceHistory.push({
-            id: "migrated-" + genset,
-            genset,
-            date: old.lastServiceDate || "",
-            hoursAtService: Number(old.lastServiceHours),
-            type: "Previous service record",
-            notes: "Migrated from previous app version",
-            created: Date.now()
-          });
-        }
-      });
-
-      saveServiceHistory();
-      saveSettings();
+      date.setMonth(date.getMonth() + Number(months || 0));
+      return date;
     }
 
     function money(value) {
@@ -575,8 +575,45 @@
       }).format(Number(value) || 0);
     }
 
-    function today() {
-      return new Date().toISOString().slice(0, 10);
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function formatDate(dateString) {
+      if (!dateString) return "Date not recorded";
+
+      const date = new Date(dateString + "T00:00:00");
+
+      if (Number.isNaN(date.getTime())) {
+        return "Date not recorded";
+      }
+
+      return date.toLocaleDateString("en-AU", {
+        day: "numeric",
+        month: "long",
+        year: "numeric"
+      });
+    }
+
+    function formatDateShort(date) {
+      if (!date) return "Not set";
+
+      return date.toLocaleDateString("en-AU", {
+        day: "numeric",
+        month: "long",
+        year: "numeric"
+      });
+    }
+
+    function newId() {
+      return crypto.randomUUID
+        ? crypto.randomUUID()
+        : String(Date.now() + Math.random());
     }
 
     function saveRecords() {
@@ -600,25 +637,98 @@
       );
     }
 
-    function escapeHtml(value) {
-      return String(value || "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+    /*
+      Initialise new settings while preserving existing settings.
+    */
+    GENSETS.forEach(genset => {
+      if (!settings[genset]) {
+        settings[genset] = {};
+      }
+
+      settings[genset].initialHours =
+        Number(settings[genset].initialHours || 0);
+
+      settings[genset].serviceInterval =
+        Number(settings[genset].serviceInterval || 100);
+
+      settings[genset].serviceIntervalMonths =
+        Number(settings[genset].serviceIntervalMonths || 12);
+
+      settings[genset].fuelPrice =
+        Number(settings[genset].fuelPrice || 0);
+
+      settings[genset].serviceStartDate =
+        settings[genset].serviceStartDate || today();
+    });
+
+    /*
+      Migrate the previous service storage format if present.
+    */
+    const oldServiceData = JSON.parse(
+      localStorage.getItem("genset-service-v1") || "{}"
+    );
+
+    if (
+      serviceHistory.length === 0 &&
+      Object.keys(oldServiceData).length > 0
+    ) {
+      GENSETS.forEach(genset => {
+        const old = oldServiceData[genset];
+
+        if (!old) return;
+
+        if (old.interval) {
+          settings[genset].serviceInterval = Number(old.interval);
+        }
+
+        if (Number(old.lastServiceHours) > 0 || old.lastServiceDate) {
+          serviceHistory.push({
+            id: "migrated-" + genset,
+            genset,
+            date: old.lastServiceDate || today(),
+            hoursAtService: Number(old.lastServiceHours || 0),
+            type: "Previous service record",
+            notes: "Migrated from previous app version",
+            created: Date.now()
+          });
+        }
+      });
+
+      saveServiceHistory();
+      saveSettings();
     }
 
-    function formatDate(dateString) {
-      if (!dateString) return "Date not recorded";
+    function fuelPriceFor(genset) {
+      return Number(settings[genset]?.fuelPrice || 0);
+    }
 
-      const date = new Date(dateString + "T00:00:00");
+    function recordCost(record) {
+      if (
+        record.cost !== undefined &&
+        record.cost !== null &&
+        record.cost !== ""
+      ) {
+        return Number(record.cost) || 0;
+      }
 
-      return date.toLocaleDateString("en-AU", {
-        day: "numeric",
-        month: "long",
-        year: "numeric"
-      });
+      if (
+        record.price !== undefined &&
+        record.price !== null &&
+        record.price !== ""
+      ) {
+        return Number(record.litres || 0) * Number(record.price || 0);
+      }
+
+      return 0;
+    }
+
+    function hasRecordedPrice(record) {
+      return (
+        record.price !== undefined &&
+        record.price !== null &&
+        record.price !== "" &&
+        Number(record.price) >= 0
+      );
     }
 
     function efficiencyFor(record) {
@@ -636,17 +746,99 @@
           0
         );
 
-      return Number(settings[genset].initialHours || 0)
+      return Number(settings[genset]?.initialHours || 0)
         + loggedHours;
     }
 
     function latestServiceFor(genset) {
       return serviceHistory
         .filter(service => service.genset === genset)
-        .sort(
-          (a, b) =>
-            Number(b.created || 0) - Number(a.created || 0)
-        )[0];
+        .sort((a, b) => {
+          const dateDifference =
+            String(b.date || "").localeCompare(String(a.date || ""));
+
+          return dateDifference ||
+            Number(b.created || 0) - Number(a.created || 0);
+        })[0];
+    }
+
+    function serviceBaselineDate(genset) {
+      const service = latestServiceFor(genset);
+
+      return service?.date ||
+        settings[genset]?.serviceStartDate ||
+        today();
+    }
+
+    function serviceStatusFor(genset) {
+      const currentHours = totalHoursFor(genset);
+      const service = latestServiceFor(genset);
+
+      const serviceHours = service
+        ? Number(service.hoursAtService || 0)
+        : Number(settings[genset].initialHours || 0);
+
+      const sinceServiceHours = Math.max(
+        0,
+        currentHours - serviceHours
+      );
+
+      const hoursInterval = Number(
+        settings[genset].serviceInterval || 100
+      );
+
+      const monthsInterval = Number(
+        settings[genset].serviceIntervalMonths || 12
+      );
+
+      const hoursDue =
+        sinceServiceHours >= hoursInterval;
+
+      const baselineDate = serviceBaselineDate(genset);
+      const nextServiceDate = addMonths(
+        baselineDate,
+        monthsInterval
+      );
+
+      const dateDue = nextServiceDate
+        ? new Date() >= nextServiceDate
+        : false;
+
+      return {
+        service,
+        currentHours,
+        serviceHours,
+        sinceServiceHours,
+        hoursInterval,
+        monthsInterval,
+        baselineDate,
+        nextServiceDate,
+        hoursDue,
+        dateDue,
+        due: hoursDue || dateDue
+      };
+    }
+
+    function updateFuelTypeLabel() {
+      const genset = $("genset").value;
+      $("fuelTypeLabel").textContent =
+        genset === "Gentrax" ? " — petrol" : " — diesel";
+    }
+
+    function applyCurrentFuelPrice() {
+      const genset = $("genset").value;
+      const currentPrice = fuelPriceFor(genset);
+
+      /*
+        Only replace the form value when it is empty or when changing
+        gensets. Existing edits retain their manually entered value.
+      */
+      if (!$("entryId").value || !$("price").value) {
+        $("price").value = currentPrice || "";
+      }
+
+      updateFuelTypeLabel();
+      updateCost();
     }
 
     function updateCost() {
@@ -657,7 +849,9 @@
       $("calculatedCost").textContent =
         money(litres * price);
 
-      const efficiency = hours > 0 ? litres / hours : 0;
+      const efficiency = hours > 0
+        ? litres / hours
+        : 0;
 
       $("calculatedEfficiency").textContent =
         efficiency.toFixed(2) + " L/hr";
@@ -689,14 +883,30 @@
         0
       );
 
-      const cost = filteredRecords.reduce((sum, record) => {
-        return sum + (
-          record.cost !== undefined
-            ? Number(record.cost)
-            : Number(record.litres || 0)
-              * Number(record.price || 0)
-        );
-      }, 0);
+      const cost = filteredRecords.reduce(
+        (sum, record) => sum + recordCost(record),
+        0
+      );
+
+      /*
+        This is deliberately based only on records that contain a fuel price.
+        It excludes initial hours and any unpriced historical records.
+      */
+      const pricedRecords = filteredRecords.filter(
+        hasRecordedPrice
+      );
+
+      const pricedHours = pricedRecords.reduce(
+        (sum, record) =>
+          sum + Number(record.hours || 0),
+        0
+      );
+
+      const pricedCost = pricedRecords.reduce(
+        (sum, record) =>
+          sum + recordCost(record),
+        0
+      );
 
       const efficiencies = filteredRecords
         .map(efficiencyFor)
@@ -709,7 +919,8 @@
           ) / efficiencies.length
         : 0;
 
-      const totalHoursValue = loggedHours + initialHours;
+      const totalHoursValue =
+        loggedHours + initialHours;
 
       $("totalHours").textContent =
         totalHoursValue.toFixed(1);
@@ -721,7 +932,9 @@
         money(cost);
 
       $("costPerHour").textContent =
-        money(totalHoursValue ? cost / totalHoursValue : 0);
+        pricedHours > 0
+          ? money(pricedCost / pricedHours)
+          : "No priced hours";
 
       $("averageEfficiency").textContent =
         averageEfficiency.toFixed(2) + " L/hr";
@@ -740,7 +953,7 @@
 
       [...records]
         .sort((a, b) =>
-          b.date.localeCompare(a.date) ||
+          String(b.date || "").localeCompare(String(a.date || "")) ||
           Number(b.created || 0) -
           Number(a.created || 0)
         )
@@ -759,12 +972,11 @@
           </div>
 
           ${grouped[date].map(record => {
-            const cost = record.cost !== undefined
-              ? Number(record.cost)
-              : Number(record.litres || 0)
-                * Number(record.price || 0);
-
+            const cost = recordCost(record);
             const efficiency = efficiencyFor(record);
+            const priceText = hasRecordedPrice(record)
+              ? `${money(record.price)} per litre`
+              : "No fuel price recorded";
 
             return `
               <div class="entry">
@@ -776,10 +988,12 @@
                 <div class="entry-details">
                   ${Number(record.hours || 0).toFixed(1)}
                   operating hours ·
+
                   ${Number(record.litres || 0).toFixed(2)}
                   litres ·
-                  ${money(record.price)}
-                  per litre ·
+
+                  ${priceText} ·
+
                   ${
                     efficiency === null
                       ? "Efficiency unavailable"
@@ -796,14 +1010,14 @@
                 <div class="button-row">
                   <button
                     class="secondary"
-                    onclick="editRecord('${record.id}')"
+                    onclick="editRecord('${escapeHtml(record.id)}')"
                   >
                     Edit
                   </button>
 
                   <button
                     class="danger"
-                    onclick="deleteRecord('${record.id}')"
+                    onclick="deleteRecord('${escapeHtml(record.id)}')"
                   >
                     Delete
                   </button>
@@ -822,83 +1036,118 @@
         ? GENSETS
         : GENSETS.filter(genset => genset === filter);
 
-      $("serviceCards").innerHTML = gensetsToDisplay
-        .map(genset => {
-          const currentHours = totalHoursFor(genset);
-          const service = latestServiceFor(genset);
-
-          const serviceHours = service
-            ? Number(service.hoursAtService)
-            : Number(settings[genset].initialHours || 0);
-
-          const sinceService = Math.max(
-            0,
-            currentHours - serviceHours
-          );
-
-          const interval = Number(
-            settings[genset].serviceInterval || 100
-          );
-
-          const remaining = interval - sinceService;
-          const due = sinceService >= interval;
+      $("serviceCards").innerHTML =
+        gensetsToDisplay.map(genset => {
+          const status = serviceStatusFor(genset);
 
           const history = serviceHistory
             .filter(item => item.genset === genset)
-            .sort(
-              (a, b) =>
-                Number(b.created || 0) -
-                Number(a.created || 0)
+            .sort((a, b) =>
+              String(b.date || "").localeCompare(String(a.date || "")) ||
+              Number(b.created || 0) -
+              Number(a.created || 0)
             );
+
+          let statusText;
+
+          if (status.due) {
+            const reasons = [];
+
+            if (status.hoursDue) {
+              reasons.push(
+                `${Math.max(
+                  0,
+                  status.sinceServiceHours -
+                  status.hoursInterval
+                ).toFixed(1)} hours overdue`
+              );
+            }
+
+            if (status.dateDue) {
+              reasons.push(
+                `date due ${formatDateShort(status.nextServiceDate)}`
+              );
+            }
+
+            statusText =
+              "Service due — " + reasons.join("; ");
+          } else {
+            const remainingHours =
+              status.hoursInterval -
+              status.sinceServiceHours;
+
+            const remainingDays = status.nextServiceDate
+              ? Math.ceil(
+                  (
+                    status.nextServiceDate.getTime() -
+                    Date.now()
+                  ) / 86400000
+                )
+              : null;
+
+            statusText =
+              `${remainingHours.toFixed(1)} operating hours remaining`;
+
+            if (remainingDays !== null) {
+              statusText +=
+                ` · ${Math.max(0, remainingDays)} days remaining`;
+            }
+          }
 
           return `
             <div class="service-card">
-              <h3>${genset}</h3>
+              <h3>${escapeHtml(genset)}</h3>
 
               <div class="summary-grid">
                 <div class="summary-card">
                   <small>Total hours</small>
-                  <strong>${currentHours.toFixed(1)}</strong>
+                  <strong>${status.currentHours.toFixed(1)}</strong>
                 </div>
 
                 <div class="summary-card">
                   <small>Since last service</small>
-                  <strong>${sinceService.toFixed(1)}</strong>
+                  <strong>
+                    ${status.sinceServiceHours.toFixed(1)}
+                  </strong>
                 </div>
               </div>
 
               <div class="service-status ${
-                due ? "status-due" : "status-ok"
+                status.due ? "status-due" : "status-ok"
               }">
-                ${
-                  due
-                    ? `Service due — ${
-                        Math.abs(remaining).toFixed(1)
-                      } hours overdue`
-                    : `${
-                        remaining.toFixed(1)
-                      } hours until service is due`
-                }
+                ${escapeHtml(statusText)}
               </div>
 
               <div class="entry-details">
                 Service interval:
-                ${interval.toFixed(0)} operating hours<br>
+                ${status.hoursInterval.toFixed(0)}
+                operating hours<br>
+
+                Time interval:
+                ${status.monthsInterval.toFixed(0)}
+                months<br>
 
                 Last service:
                 ${
-                  service
-                    ? `${formatDate(service.date)}
+                  status.service
+                    ? `${formatDate(status.service.date)}
                        at ${Number(
-                         service.hoursAtService
+                         status.service.hoursAtService || 0
                        ).toFixed(1)} hours`
                     : "Not recorded"
+                }<br>
+
+                Next date-based service:
+                ${
+                  status.nextServiceDate
+                    ? formatDateShort(status.nextServiceDate)
+                    : "Not set"
                 }
               </div>
 
               <button
                 class="service-button"
-                onclick="recordService('${genset}')"
+                onclick="recordService('${escapeHtml(genset)}')"
               >
                 Record service completed
               </button>
@@ -908,15 +1157,17 @@
                   ? `
                     <div class="service-history">
                       <strong>Service history</strong>
+
                       ${history.map(item => `
                         <div>
                           ${formatDate(item.date)} —
                           ${Number(
-                            item.hoursAtService
+                            item.hoursAtService || 0
                           ).toFixed(1)} hours —
                           ${escapeHtml(
                             item.type || "Service"
                           )}
+
                           ${
                             item.notes
                               ? `<br>${escapeHtml(item.notes)}`
@@ -936,44 +1187,84 @@
 
     function renderSetup() {
       $("setupFields").innerHTML = GENSETS
-        .map(genset => `
-          <div class="service-card">
-            <h3>${genset}</h3>
+        .map(genset => {
+          const config = settings[genset];
 
-            <label for="initial-${genset}">
-              Operating hours before using this app
-            </label>
+          return `
+            <div class="service-card">
+              <h3>${escapeHtml(genset)}</h3>
 
-            <input
-              id="initial-${genset}"
-              type="number"
-              min="0"
-              step="0.1"
-              value="${settings[genset].initialHours || 0}"
-            >
+              <label for="initial-${genset}">
+                Operating hours before using this app
+              </label>
 
-            <label for="interval-${genset}">
-              Service interval, hours
-            </label>
+              <input
+                id="initial-${genset}"
+                type="number"
+                min="0"
+                step="0.1"
+                value="${Number(config.initialHours || 0)}"
+              >
 
-            <input
-              id="interval-${genset}"
-              type="number"
-              min="1"
-              step="1"
-              value="${
-                settings[genset].serviceInterval || 100
-              }"
-            >
+              <label for="price-${genset}">
+                Current fuel price per litre
+                ${
+                  genset === "Gentrax"
+                    ? "(petrol)"
+                    : "(diesel)"
+                }
+              </label>
 
-            <button
-              class="secondary"
-              onclick="saveSetup('${genset}')"
-            >
-              Save ${genset} setup
-            </button>
-          </div>
-        `)
+              <input
+                id="price-${genset}"
+                type="number"
+                min="0"
+                step="0.001"
+                placeholder="e.g. 2.00"
+                value="${
+                  config.fuelPrice
+                    ? Number(config.fuelPrice)
+                    : ""
+                }"
+              >
+
+              <label for="interval-${genset}">
+                Service interval, operating hours
+              </label>
+
+              <input
+                id="interval-${genset}"
+                type="number"
+                min="1"
+                step="1"
+                value="${Number(
+                  config.serviceInterval || 100
+                )}"
+              >
+
+              <label for="months-${genset}">
+                Service interval, months
+              </label>
+
+              <input
+                id="months-${genset}"
+                type="number"
+                min="1"
+                step="1"
+                value="${Number(
+                  config.serviceIntervalMonths || 12
+                )}"
+              >
+
+              <button
+                class="secondary"
+                onclick="saveSetup('${escapeHtml(genset)}')"
+              >
+                Save ${escapeHtml(genset)} setup
+              </button>
+            </div>
+          `;
+        })
         .join("");
     }
 
@@ -982,17 +1273,20 @@
       renderSetup();
       renderSummary();
       renderRecords();
+      applyCurrentFuelPrice();
     }
 
     function resetForm() {
       $("logForm").reset();
       $("date").value = today();
       $("entryId").value = "";
+      $("genset").value = "Gentrax";
       $("formTitle").textContent = "Add operating record";
       $("saveButton").textContent = "Save record";
       $("cancelButton").hidden = true;
       $("calculatedCost").textContent = money(0);
       $("calculatedEfficiency").textContent = "0.00 L/hr";
+      applyCurrentFuelPrice();
     }
 
     $("date").value = today();
@@ -1000,6 +1294,13 @@
     $("litres").addEventListener("input", updateCost);
     $("price").addEventListener("input", updateCost);
     $("hours").addEventListener("input", updateCost);
+
+    $("genset").addEventListener("change", () => {
+      $("price").value =
+        fuelPriceFor($("genset").value) || "";
+      updateFuelTypeLabel();
+      updateCost();
+    });
 
     $("summaryGensetFilter").addEventListener(
       "change",
@@ -1014,20 +1315,17 @@
     $("logForm").addEventListener("submit", event => {
       event.preventDefault();
 
+      const hours = Number($("hours").value);
       const litres = Number($("litres").value);
       const price = Number($("price").value);
-      const hours = Number($("hours").value);
       const existingId = $("entryId").value;
+
       const existing = records.find(
         record => record.id === existingId
       );
 
       const record = {
-        id: existingId || (
-          crypto.randomUUID
-            ? crypto.randomUUID()
-            : String(Date.now())
-        ),
+        id: existingId || newId(),
         date: $("date").value,
         genset: $("genset").value,
         hours,
@@ -1043,7 +1341,9 @@
 
       if (existingId) {
         records = records.map(item =>
-          item.id === existingId ? record : item
+          item.id === existingId
+            ? record
+            : item
         );
       } else {
         records.push(record);
@@ -1060,7 +1360,9 @@
     );
 
     window.editRecord = function(id) {
-      const record = records.find(item => item.id === id);
+      const record = records.find(
+        item => item.id === id
+      );
 
       if (!record) return;
 
@@ -1069,17 +1371,24 @@
       $("genset").value = record.genset;
       $("hours").value = record.hours;
       $("litres").value = record.litres;
-      $("price").value = record.price;
+      $("price").value =
+        record.price === undefined
+          ? ""
+          : record.price;
       $("notes").value = record.notes || "";
 
       $("formTitle").textContent =
         "Edit operating record";
 
-      $("saveButton").textContent = "Update record";
+      $("saveButton").textContent =
+        "Update record";
+
       $("cancelButton").hidden = false;
 
+      updateFuelTypeLabel();
       updateCost();
       showScreen("logs");
+
       window.scrollTo({
         top: 0,
         behavior: "smooth"
@@ -1089,12 +1398,15 @@
     window.deleteRecord = function(id) {
       if (!confirm(
         "Delete this operating record?\n\n" +
-        "This may change the service-hour calculation."
+        "This may change dashboard and service calculations."
       )) {
         return;
       }
 
-      records = records.filter(record => record.id !== id);
+      records = records.filter(
+        record => record.id !== id
+      );
+
       saveRecords();
       render();
     };
@@ -1120,9 +1432,7 @@
         prompt("Optional service notes:", "") || "";
 
       serviceHistory.push({
-        id: crypto.randomUUID
-          ? crypto.randomUUID()
-          : String(Date.now()),
+        id: newId(),
         genset,
         date: today(),
         hoursAtService: currentHours,
@@ -1131,7 +1441,14 @@
         created: Date.now()
       });
 
+      /*
+        The next month-based interval is measured from this
+        newly recorded service date.
+      */
+      settings[genset].serviceStartDate = today();
+
       saveServiceHistory();
+      saveSettings();
       render();
     };
 
@@ -1140,33 +1457,51 @@
         $("initial-" + genset).value
       ) || 0;
 
+      const fuelPriceValue =
+        $("price-" + genset).value.trim();
+
+      const fuelPrice =
+        fuelPriceValue === ""
+          ? 0
+          : Number(fuelPriceValue);
+
       const serviceInterval = Number(
         $("interval-" + genset).value
       ) || 100;
 
-      const oldInitial = Number(
-        settings[genset].initialHours || 0
-      );
+      const serviceIntervalMonths = Number(
+        $("months-" + genset).value
+      ) || 12;
 
-      const oldInterval = Number(
-        settings[genset].serviceInterval || 100
-      );
+      const old = settings[genset];
 
-      if (
-        initialHours === oldInitial &&
-        serviceInterval === oldInterval
-      ) {
+      const changed =
+        initialHours !== Number(old.initialHours || 0) ||
+        fuelPrice !== Number(old.fuelPrice || 0) ||
+        serviceInterval !==
+          Number(old.serviceInterval || 100) ||
+        serviceIntervalMonths !==
+          Number(old.serviceIntervalMonths || 12);
+
+      if (!changed) {
         alert("No changes were made.");
         return;
       }
 
       const confirmed = confirm(
-        `Change ${genset} initial conditions?\n\n` +
-        `Initial hours: ${oldInitial.toFixed(1)} → ` +
-        `${initialHours.toFixed(1)}\n` +
-        `Service interval: ${oldInterval} → ` +
-        `${serviceInterval}\n\n` +
-        "This will change service calculations."
+        `Save ${genset} setup changes?\n\n` +
+        `Initial hours: ${Number(
+          old.initialHours || 0
+        ).toFixed(1)} → ${initialHours.toFixed(1)}\n` +
+        `Fuel price: ${money(
+          old.fuelPrice || 0
+        )} → ${money(fuelPrice)}\n` +
+        `Hour interval: ${Number(
+          old.serviceInterval || 100
+        )} → ${serviceInterval}\n` +
+        `Month interval: ${Number(
+          old.serviceIntervalMonths || 12
+        )} → ${serviceIntervalMonths}`
       );
 
       if (!confirmed) {
@@ -1175,7 +1510,13 @@
       }
 
       settings[genset].initialHours = initialHours;
+      settings[genset].fuelPrice = fuelPrice;
       settings[genset].serviceInterval = serviceInterval;
+      settings[genset].serviceIntervalMonths =
+        serviceIntervalMonths;
+
+      settings[genset].serviceStartDate =
+        settings[genset].serviceStartDate || today();
 
       saveSettings();
       render();
@@ -1200,7 +1541,7 @@
       () => {
         const backup = {
           app: "Genset Log",
-          version: 3,
+          version: 4,
           exported: new Date().toISOString(),
           records,
           serviceHistory,
@@ -1219,13 +1560,16 @@
       "click",
       () => {
         if (!records.length) {
-          alert("There are no operating records to export.");
+          alert(
+            "There are no operating records to export."
+          );
           return;
         }
 
         const headings = [
           "Date",
           "Genset",
+          "Fuel type",
           "Operating hours",
           "Litres used",
           "Fuel price per litre",
@@ -1235,21 +1579,27 @@
         ];
 
         const rows = records.map(record => {
-          const cost = record.cost !== undefined
-            ? Number(record.cost)
-            : Number(record.litres || 0)
-              * Number(record.price || 0);
+          const fuelType =
+            record.genset === "Gentrax"
+              ? "Petrol"
+              : "Diesel";
 
-          const efficiency = efficiencyFor(record);
+          const efficiency =
+            efficiencyFor(record);
 
           return [
             record.date,
             record.genset,
+            fuelType,
             record.hours,
             record.litres,
-            record.price,
-            cost,
-            efficiency === null ? "" : efficiency,
+            hasRecordedPrice(record)
+              ? record.price
+              : "",
+            recordCost(record),
+            efficiency === null
+              ? ""
+              : efficiency,
             record.notes || ""
           ];
         });
@@ -1257,7 +1607,8 @@
         const csv = [headings, ...rows]
           .map(row =>
             row.map(value =>
-              `"${String(value).replaceAll('"', '""')}"`
+              `"${String(value ?? "")
+                .replaceAll('"', '""')}"`
             ).join(",")
           )
           .join("\n");
@@ -1276,7 +1627,9 @@
         const file = $("backupFile").files[0];
 
         if (!file) {
-          alert("Please select a full backup file first.");
+          alert(
+            "Please select a full backup file first."
+          );
           return;
         }
 
@@ -1292,14 +1645,18 @@
 
         reader.onload = event => {
           try {
-            const backup = JSON.parse(event.target.result);
+            const backup = JSON.parse(
+              event.target.result
+            );
 
             if (
               !Array.isArray(backup.records) ||
               !Array.isArray(backup.serviceHistory) ||
               !backup.settings
             ) {
-              throw new Error("Invalid backup format");
+              throw new Error(
+                "Invalid backup format"
+              );
             }
 
             records = backup.records;
@@ -1308,11 +1665,32 @@
 
             GENSETS.forEach(genset => {
               if (!settings[genset]) {
-                settings[genset] = {
-                  initialHours: 0,
-                  serviceInterval: 100
-                };
+                settings[genset] = {};
               }
+
+              settings[genset].initialHours =
+                Number(
+                  settings[genset].initialHours || 0
+                );
+
+              settings[genset].serviceInterval =
+                Number(
+                  settings[genset].serviceInterval || 100
+                );
+
+              settings[genset].serviceIntervalMonths =
+                Number(
+                  settings[genset].serviceIntervalMonths || 12
+                );
+
+              settings[genset].fuelPrice =
+                Number(
+                  settings[genset].fuelPrice || 0
+                );
+
+              settings[genset].serviceStartDate =
+                settings[genset].serviceStartDate ||
+                today();
             });
 
             saveRecords();
@@ -1320,7 +1698,9 @@
             saveSettings();
             render();
 
-            alert("Backup restored successfully.");
+            alert(
+              "Backup restored successfully."
+            );
           } catch (error) {
             alert(
               "That file is not a valid Genset Log backup."
@@ -1333,30 +1713,41 @@
     );
 
     function showScreen(screenId) {
-      document.querySelectorAll(".screen").forEach(screen => {
-        screen.classList.toggle(
-          "active",
-          screen.id === screenId
-        );
-      });
+      document.querySelectorAll(".screen")
+        .forEach(screen => {
+          screen.classList.toggle(
+            "active",
+            screen.id === screenId
+          );
+        });
 
-      document.querySelectorAll("nav button").forEach(button => {
-        button.classList.toggle(
-          "active",
-          button.dataset.screen === screenId
-        );
-      });
+      document.querySelectorAll("nav button")
+        .forEach(button => {
+          button.classList.toggle(
+            "active",
+            button.dataset.screen === screenId
+          );
+        });
     }
 
-    document.querySelectorAll("nav button").forEach(button => {
-      button.addEventListener("click", () => {
-        showScreen(button.dataset.screen);
+    document.querySelectorAll("nav button")
+      .forEach(button => {
+        button.addEventListener(
+          "click",
+          () => showScreen(button.dataset.screen)
+        );
       });
-    });
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js");
     }
+
+    /*
+      Gentrax is now the default service-page filter.
+      The value is explicitly set in the HTML and repeated here
+      in case the browser has retained an older form state.
+    */
+    $("serviceGensetFilter").value = "Gentrax";
 
     render();
   </script>
